@@ -33,10 +33,35 @@ import terasort.TeraSort;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 public class Utils {
+
+  public static Map<String, LocalResource> getLocalResources(List<Class> classList,
+      TezConfiguration tezConf) throws IOException, URISyntaxException {
+    Map<String, LocalResource> localResources = Maps.newHashMap();
+    Path stagingDir = TezCommonUtils.getTezBaseStagingPath(tezConf);
+
+    // staging dir
+    FileSystem fs = FileSystem.get(tezConf);
+    String uuid = UUID.randomUUID().toString();
+    Path jobJar = new Path(stagingDir, uuid + "_job.jar");
+    if (fs.exists(jobJar)) {
+      fs.delete(jobJar, false);
+    }
+
+    for(Class clazz : classList) {
+      Path path = getCurrentJarURL(clazz);
+      fs.copyFromLocalFile(path, jobJar);
+      System.out.println("Path : " + path);
+    }
+
+
+    localResources.put(uuid + "_job.jar", createLocalResource(fs, jobJar));
+    return localResources;
+  }
 
   public static Map<String, LocalResource> getLocalResources(TezConfiguration tezConf) throws
       IOException, URISyntaxException {
@@ -50,14 +75,14 @@ public class Utils {
     if (fs.exists(jobJar)) {
       fs.delete(jobJar, false);
     }
-    fs.copyFromLocalFile(getCurrentJarURL(), jobJar);
+    fs.copyFromLocalFile(getCurrentJarURL(TeraSort.class), jobJar);
 
     localResources.put(uuid + "_job.jar", createLocalResource(fs, jobJar));
     return localResources;
   }
 
-  public static Path getCurrentJarURL() throws URISyntaxException {
-    return new Path(TeraSort.class.getProtectionDomain().getCodeSource()
+  public static Path getCurrentJarURL(Class clazz) throws URISyntaxException {
+    return new Path(clazz.getProtectionDomain().getCodeSource()
         .getLocation().toURI());
   }
 

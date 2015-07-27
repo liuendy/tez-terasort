@@ -17,16 +17,26 @@
  */
 package terasort;
 
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.hadoop.yarn.api.records.LocalResource;
+import org.apache.hadoop.yarn.api.records.LocalResourceType;
+import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
+import org.apache.hadoop.yarn.util.ConverterUtils;
+import org.apache.hadoop.yarn.util.Records;
 import org.apache.tez.client.TezClient;
+import org.apache.tez.common.TezCommonUtils;
 import org.apache.tez.common.TezUtils;
 import org.apache.tez.dag.api.DAG;
 import org.apache.tez.dag.api.Edge;
@@ -38,7 +48,6 @@ import org.apache.tez.dag.api.client.DAGStatus;
 import org.apache.tez.dag.api.client.StatusGetOpts;
 import org.apache.tez.mapreduce.input.MRInput;
 import org.apache.tez.mapreduce.output.MROutput;
-import org.apache.tez.runtime.library.api.TezRuntimeConfiguration;
 import org.apache.tez.runtime.library.conf.OrderedPartitionedKVEdgeConfig;
 import org.apache.tez.runtime.library.conf.UnorderedKVEdgeConfig;
 import terasort.io.TeraInputFormat;
@@ -47,9 +56,12 @@ import terasort.processors.PartitionProcessor;
 import terasort.processors.ReduceProcessor;
 import terasort.processors.SamplerProcessor;
 import terasort.processors.ScanProcessor;
-import terasort.utils.Utils;
 
+import java.io.IOException;
+import java.net.URISyntaxException;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Generates the sampled split points, launches the job, and waits for it to
@@ -78,6 +90,45 @@ public class TeraSort extends Configured implements Tool {
 
   public static final String REDUCERS = "final.reducers";
 
+  Map<String, LocalResource> getLocalResources(TezConfiguration tezConf) throws
+      IOException, URISyntaxException {
+    Map<String, LocalResource> localResources = Maps.newHashMap();
+    Path stagingDir = TezCommonUtils.getTezBaseStagingPath(tezConf);
+
+    // staging dir
+    FileSystem fs = FileSystem.get(tezConf);
+    String uuid = UUID.randomUUID().toString();
+    Path jobJar = new Path(stagingDir, uuid + "_job.jar");
+    if (fs.exists(jobJar)) {
+      fs.delete(jobJar, false);
+    }
+    fs.copyFromLocalFile(getCurrentJarURL(), jobJar);
+
+    localResources.put(uuid + "_job.jar", createLocalResource(fs, jobJar));
+    return localResources;
+  }
+
+  Path getCurrentJarURL() throws URISyntaxException {
+    return new Path(TeraSort.class.getProtectionDomain().getCodeSource()
+        .getLocation().toURI());
+  }
+
+  LocalResource createLocalResource(FileSystem fs, Path file) throws IOException {
+    final LocalResourceType type = LocalResourceType.FILE;
+    final LocalResourceVisibility visibility = LocalResourceVisibility.APPLICATION;
+    FileStatus fstat = fs.getFileStatus(file);
+    org.apache.hadoop.yarn.api.records.URL resourceURL = ConverterUtils.getYarnUrlFromPath(file);
+    long resourceSize = fstat.getLen();
+    long resourceModificationTime = fstat.getModificationTime();
+    LocalResource lr = Records.newRecord(LocalResource.class);
+    lr.setResource(resourceURL);
+    lr.setType(type);
+    lr.setSize(resourceSize);
+    lr.setVisibility(visibility);
+    lr.setTimestamp(resourceModificationTime);
+    return lr;
+  }
+
   public int run(String[] args) throws Exception {
     LOG.info("starting");
 
@@ -93,6 +144,8 @@ public class TeraSort extends Configured implements Tool {
      *  SCAN_VERTEX ---->                      /
      *                   \ --> SAMPLER_VERTEX /
      *
+     *
+     *
      * SCAN_VERTEX --> PARTITION_VERTEX ( One to One )
      * SCAN_VERTEX --> SAMPLER_VERTEX ( broadcast )
      * SAMPLER_VERTEX --> PARTITION_VERTEX ( broadcast )
@@ -104,7 +157,9 @@ public class TeraSort extends Configured implements Tool {
 
     TezConfiguration tezConf = new TezConfiguration(getConf());
     DAG sortDAG = DAG.create("TeraSort-Tez");
-    sortDAG.addTaskLocalFiles(Utils.getLocalResources(tezConf));
+
+    // sortDAG.addTaskLocalFiles(Utils.getLocalResources(classList, tezConf));
+    sortDAG.addTaskLocalFiles(getLocalResources(tezConf));
 
     Vertex scanVertex = Vertex.create(SCAN_VERTEX, ProcessorDescriptor.create(ScanProcessor
         .class.getName()).setUserPayload(TezUtils.createUserPayloadFromConf(tezConf)), -1);
@@ -126,7 +181,6 @@ public class TeraSort extends Configured implements Tool {
     sinkVertex.addDataSink(SINK, MROutput.createConfigBuilder(tezConf,
         TeraOutputFormat.class, outputPath).build());
     sortDAG.addVertex(sinkVertex);
-
 
     //Broadcast
     Edge scanToSampler = Edge.create(scanVertex, samplerVertex, UnorderedKVEdgeConfig
@@ -180,10 +234,12 @@ public class TeraSort extends Configured implements Tool {
 
     Configuration conf = new TezConfiguration();
 
+    /*
     //For local mode testing
     conf.setBoolean(TezConfiguration.TEZ_LOCAL_MODE, true);
     conf.set("fs.default.name", "file:///");
     conf.setBoolean(TezRuntimeConfiguration.TEZ_RUNTIME_OPTIMIZE_LOCAL_FETCH, true);
+    */
 
     int res = ToolRunner.run(conf, new TeraSort(), args);
     System.exit(res);
