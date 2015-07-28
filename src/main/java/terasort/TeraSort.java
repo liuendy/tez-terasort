@@ -48,6 +48,7 @@ import org.apache.tez.dag.api.client.DAGStatus;
 import org.apache.tez.dag.api.client.StatusGetOpts;
 import org.apache.tez.mapreduce.input.MRInput;
 import org.apache.tez.mapreduce.output.MROutput;
+import org.apache.tez.runtime.library.api.TezRuntimeConfiguration;
 import org.apache.tez.runtime.library.conf.OrderedPartitionedKVEdgeConfig;
 import org.apache.tez.runtime.library.conf.UnorderedKVEdgeConfig;
 import terasort.io.TeraInputFormat;
@@ -211,6 +212,7 @@ public class TeraSort extends Configured implements Tool {
     TezClient client = TezClient.create("TestDAGSort", tezConf);
     client.start();
     client.waitTillReady();
+    client.addAppMasterLocalFiles(getLocalResources(tezConf));
 
     DAGClient dagClient = client.submitDAG(sortDAG);
     Set<StatusGetOpts> getOpts = Sets.newHashSet();
@@ -229,6 +231,7 @@ public class TeraSort extends Configured implements Tool {
 
   /**
    * @param args
+   * e.g yarn jar tez-terasort-1.1.0-SNAPSHOT.jar terasort.TeraSort /user/rajesh/teragen-200/ /user/rajesh/tera-output-200/ 100 100
    */
   public static void main(String[] args) throws Exception {
 
@@ -239,7 +242,7 @@ public class TeraSort extends Configured implements Tool {
     conf.setBoolean(TezConfiguration.TEZ_LOCAL_MODE, true);
     conf.set("fs.default.name", "file:///");
     conf.setBoolean(TezRuntimeConfiguration.TEZ_RUNTIME_OPTIMIZE_LOCAL_FETCH, true);
-    */
+     */
 
     int res = ToolRunner.run(conf, new TeraSort(), args);
     System.exit(res);
